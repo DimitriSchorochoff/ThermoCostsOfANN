@@ -8,5 +8,6 @@ To test the code present on this repository, the following packages are required
 - numpy 1.22.3
 - tensorflow 2.9.1
 - tensorflow.keras 2.9.0
+- tqmd 4.64.1
 
 Note that the versions proposed are the ones used for the software developpement and that other versions may or may not work.
