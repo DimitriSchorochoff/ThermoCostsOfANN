@@ -1,4 +1,4 @@
-__author__ = "Schorchoff Dimitri"
+__author__ = "Schorochoff Dimitri"
 __version__ = "1.1"
 
 import tensorflow as tf
@@ -154,7 +154,7 @@ def samples2MismatchPerNeuron(model, inputs, opti_inputs, bin_size=0.01, use_app
 def heuristicLandauer(model, std):
     """
     Compute estimation based on a heuristic of the Landauer cost of each layer in eV
-    that yields a basic keras model when the input follows a normal distribution.
+    that yields a basic keras model when the input follows a Normal distribution.
 
     Parameters
     ----------
@@ -164,7 +164,7 @@ def heuristicLandauer(model, std):
         tf.keras.layers.AveragePooling2D, tf.keras.layers.Flatten and/or
         tf.keras.layers.Reshape layers
     std : float
-        The standard deviation of the input normal distribution
+        The standard deviation of the input Normal distribution
 
     Returns
     -------
@@ -172,7 +172,7 @@ def heuristicLandauer(model, std):
         The Landauer cost in eV of each layer.
     """
     costs = [0]
-    S_normal = entropy_normal(std)
+    S_Normal = entropy_Normal(std)
     shapes = get_shapes(model)
     for i in range(len(model.layers)):
         previousShape = shapes[i]
@@ -180,16 +180,16 @@ def heuristicLandauer(model, std):
         layer = model.layers[i]
 
         if isinstance(layer, tf.keras.layers.Dense):
-            costs.append(shape[1]*previousShape[1]*S_normal*_ENTROPY2EV)
+            costs.append(shape[1]*previousShape[1]*S_Normal*_ENTROPY2EV)
 
         elif isinstance(layer, tf.keras.layers.Conv2D):
             K = layer.kernel_size[0]
-            costs.append(shape[3] * (previousShape[1]-K+1)**2 * K**2 * S_normal * _ENTROPY2EV)
+            costs.append(shape[3] * (previousShape[1]-K+1)**2 * K**2 * S_Normal * _ENTROPY2EV)
 
         elif isinstance(layer, tf.keras.layers.MaxPooling2D) or\
                 isinstance(layer, tf.keras.layers.AveragePooling2D):
             P = layer.pool_size[0]
-            costs.append(previousShape[1]*previousShape[2]//(P**2) * (P**2 - 1/P)* S_normal * _ENTROPY2EV)
+            costs.append(previousShape[1]*previousShape[2]//(P**2) * (P**2 - 1/P)* S_Normal * _ENTROPY2EV)
 
         elif isinstance(layer, tf.keras.layers.Flatten) or\
                 isinstance(layer, tf.keras.layers.Reshape):
@@ -200,7 +200,7 @@ def heuristicLandauer(model, std):
 def heuristicMismatch(model, mean, std, mean_opt, std_opt):
     """
     Compute estimation based on a heuristic of the Landauer cost of each layer in eV
-    that yields a basic keras model when the input follows a normal distribution.
+    that yields a basic keras model when the input follows a Normal distribution.
 
     Parameters
     ----------
@@ -210,13 +210,13 @@ def heuristicMismatch(model, mean, std, mean_opt, std_opt):
         tf.keras.layers.AveragePooling2D, tf.keras.layers.Flatten and/or
         tf.keras.layers.Reshape layers
     mean : float
-        The mean of the input normal distribution
+        The mean of the input Normal distribution
     std : float
-        The standard deviation of the input normal distribution
+        The standard deviation of the input Normal distribution
     mean_opt: float
-        The mean of the optimal normal distribution
+        The mean of the optimal Normal distribution
     std_opt: float
-        The standard deviation of the optimal normal distribution
+        The standard deviation of the optimal Normal distribution
 
     Returns
     -------
@@ -224,7 +224,7 @@ def heuristicMismatch(model, mean, std, mean_opt, std_opt):
         The Mismatch cost in eV of each layer.
     """
     costs = [0]
-    D_normal = KL_divergence_normal(mean, std, mean_opt, std_opt)
+    D_Normal = KL_divergence_Normal(mean, std, mean_opt, std_opt)
     shapes = get_shapes(model)
     for i in range(len(model.layers)):
         previousShape = shapes[i]
@@ -232,16 +232,16 @@ def heuristicMismatch(model, mean, std, mean_opt, std_opt):
         layer = model.layers[i]
 
         if isinstance(layer, tf.keras.layers.Dense):
-            costs.append(shape[1]*previousShape[1]*D_normal*_ENTROPY2EV)
+            costs.append(shape[1]*previousShape[1]*D_Normal*_ENTROPY2EV)
 
         elif isinstance(layer, tf.keras.layers.Conv2D):
             K = layer.kernel_size[0]
-            costs.append(shape[3] * (previousShape[1]-K+1)**2 * K**2 * D_normal * _ENTROPY2EV)
+            costs.append(shape[3] * (previousShape[1]-K+1)**2 * K**2 * D_Normal * _ENTROPY2EV)
 
         elif isinstance(layer, tf.keras.layers.MaxPooling2D) or\
                 isinstance(layer, tf.keras.layers.AveragePooling2D):
             P = layer.pool_size[0]
-            costs.append(previousShape[1]*previousShape[2]//(P**2) * (P**2 - 1/P)* D_normal * _ENTROPY2EV/3)
+            costs.append(previousShape[1]*previousShape[2]//(P**2) * (P**2 - 1/P)* D_Normal * _ENTROPY2EV/3)
 
         elif isinstance(layer, tf.keras.layers.Flatten) or\
                 isinstance(layer, tf.keras.layers.Reshape):
@@ -309,16 +309,16 @@ def KL_divergence(countP, countQ):
 def _KL2Mismatch(KL_i, KL_f):
     return (KL_i - KL_f) * _ENTROPY2EV
 
-def entropy_normal(sigma):
+def entropy_Normal(sigma):
     """
-    Return the analytical entropy of a normal distribution of standard deviation sigma
+    Return the analytical entropy of a Normal distribution of standard deviation sigma
     """
     return 0.5 * np.log(2 * np.pi * np.e * sigma**2)
 
-def KL_divergence_normal(mu1, sigma1, mu2, sigma2):
+def KL_divergence_Normal(mu1, sigma1, mu2, sigma2):
     """
-    Return the analytical KL divergence between a normal distribution of mean mu1 and
-    standard deviation sigma1 and another normal distribution of mean mu2 and standard deviation
+    Return the analytical KL divergence between a Normal distribution of mean mu1 and
+    standard deviation sigma1 and another Normal distribution of mean mu2 and standard deviation
     sigma2
     """
     return np.log(sigma2/sigma1) + (sigma1**2+ (mu2 - mu1)**2)/(2*sigma2**2) - 0.5
