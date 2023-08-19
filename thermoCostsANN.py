@@ -1,12 +1,12 @@
 __author__ = "Schorchoff Dimitri"
-__version__ = "1.0"
+__version__ = "1.1"
 
 import tensorflow as tf
 from tensorflow import keras
 from keras import backend as K
 from tensorflow.keras import layers
 import numpy as np
-import numpy.random as random
+from tqdm import tqdm
 
 _K = 1.380649 * 10 ** (-23)
 _J2EV = 1 / (1.602176634 * 10 ** (-19))
@@ -18,12 +18,12 @@ _ENTROPY2EV = _K * _ROOMTEMP * _J2EV
 ###                        MAIN FUNCTIONS                          ###
 #########################################################################
 
-def samples2Landauer(model, inputs, bin_size=0.01):
+def samples2Landauer(model, inputs, bin_size=0.01, verbose=True):
     """
     samples2Landauer(model = keras.Sequential([layers.Input((n1)),layers.Dense(n2),]),
      (s1, s2, ...), bin_size=0.01)
 
-    Compute the total Landauer cost that yield a basic keras model
+    Compute the total Landauer cost in eV that yield a basic keras model
     when evaluating an input of a given distribution.
 
     Parameters
@@ -38,6 +38,8 @@ def samples2Landauer(model, inputs, bin_size=0.01):
         the same shape as the model input.
     bin_size : float, optional
         Define the size of the bins that are used to compute discretized entropy.
+    verbose: boolean, optional
+        Define whether or not to show a progressbar
 
     Returns
     -------
@@ -45,19 +47,16 @@ def samples2Landauer(model, inputs, bin_size=0.01):
         The total Landauer cost.
     """
 
-    h = samples2LandauerPerNeuron(model, inputs, bin_size=bin_size)
-    s = get_shapes(model)
-    # We change the shape of the input layer to 0 as we know it has no cost
-    s[0] = (0,)
-    return sum_matrix(h, s)
+    h = samples2LandauerPerNeuron(model, inputs, bin_size=bin_size, verbose=verbose)
+    return sum_matrix(h, get_shapes(model))
 
 
-def samples2Mismatch(model, inputs, opti_inputs, bin_size=0.01):
+def samples2Mismatch(model, inputs, opti_inputs, bin_size=0.01, use_approx=True, verbose=True):
     """
     samples2Mismatch(model = keras.Sequential([layers.Input((n1)),layers.Dense(n2),]),
      (s1, s2, ...), (q1, q2, ...), bin_size=0.01)
 
-    Compute the total Mismatch cost that yield a basic keras model
+    Compute the total Mismatch cost in eV that yield a basic keras model
     when evaluating an input of a given distribution if the entropy production
     is minimized by a given optimal distribution.
 
@@ -76,22 +75,22 @@ def samples2Mismatch(model, inputs, opti_inputs, bin_size=0.01):
         must have the same shape as the model input.
     bin_size : float, optional
         Define the size of the bins that are used to compute discretized entropy.
-
+    use_approx: bool, optional
+        If True, approximate the cost by considering every distribution as independant.
+    verbose: boolean, optional
+        Define whether or not to show a progressbar
     Returns
     -------
     res : float
         The total Mismatch cost.
     """
-    h = samples2MismatchPerNeuron(model, inputs, opti_inputs, bin_size=bin_size)
-    s = get_shapes(model)
-    # We change the shape of the input layer to 0 as we know it has no cost
-    s[0] = (0,)
-    return sum_matrix(h, s)
+    h = samples2MismatchPerNeuron(model, inputs, opti_inputs, bin_size=bin_size, use_approx=use_approx, verbose=verbose)
+    return sum_matrix(h, get_shapes(model))
 
 
-def samples2LandauerPerNeuron(model, inputs, bin_size=0.01):
+def samples2LandauerPerNeuron(model, inputs, bin_size=0.01, verbose=True):
     """
-    Compute the Landauer cost of each neuron that yield a basic keras model
+    Compute the Landauer cost in eV of each neuron that yield a basic keras model
     when evaluating an input of a given distribution.
 
     Parameters
@@ -105,16 +104,16 @@ def samples2LandauerPerNeuron(model, inputs, bin_size=0.01):
         l1 has the same shape as layer 1 and so on.
     """
     s = get_shapes(model)
-    h = _samples2Histos(model, inputs, bin_size=bin_size)
+    h = _samples2Histos(model, inputs, bin_size=bin_size, verbose=verbose)
     _histos2Entropy(h, s, entropy_func=CAE_entropy)
     _entropy2Landauer(model, h)
 
     return h
 
 
-def samples2MismatchPerNeuron(model, inputs, opti_inputs, bin_size=0.01):
+def samples2MismatchPerNeuron(model, inputs, opti_inputs, bin_size=0.01, use_approx=True, verbose=True):
     """
-    Compute the Mismatch cost of each neuron that yield a basic keras model
+    Compute the Mismatch cost in eV of each neuron that yield a basic keras model
     when evaluating an input of a given distribution.
 
     Parameters
@@ -128,22 +127,127 @@ def samples2MismatchPerNeuron(model, inputs, opti_inputs, bin_size=0.01):
         l1 has the same shape as layer 1 and so on.
     """
     s = get_shapes(model)
-    # Compute KL divergence of the set initial neurons if they are dependant
-    h = _samples2HistosCorrelated(model, inputs, bin_size=bin_size)
-    opti_h = _samples2HistosCorrelated(model, opti_inputs, bin_size=bin_size)
-    _histos2KLDivergence(h, opti_h, s)
-
     # Compute the KL divergence of final neuron
-    h_nocorr = _samples2Histos(model, inputs, bin_size=bin_size)
-    opti_h_nocorr = _samples2Histos(model, opti_inputs, bin_size=bin_size)
+    h_nocorr = _samples2Histos(model, inputs, bin_size=bin_size, verbose=verbose)
+    opti_h_nocorr = _samples2Histos(model, opti_inputs, bin_size=bin_size, verbose=verbose)
     _histos2KLDivergence(h_nocorr, opti_h_nocorr, s)
 
-    # Compute the Mismatch cost from KL divergence
-    map_matrixes(opti_h, opti_h_nocorr, s, _KL2Mismatch)
+    if use_approx:
+        _entropy2Landauer(model, opti_h_nocorr)
+        opti_h_nocorr[0] = []  # Input layer has no Mismatch cost
+        return opti_h_nocorr
 
-    opti_h[0] = []  # Input layer has no Mismatch cost
+    else:
+        # Compute KL divergence of the set initial neurons if they are dependant
+        h = _samples2HistosCorrelated(model, inputs, bin_size=bin_size)
+        opti_h = _samples2HistosCorrelated(model, opti_inputs, bin_size=bin_size)
+        _histos2KLDivergence(h, opti_h, s)
 
-    return opti_h
+        # Compute the Mismatch cost from KL divergence
+        map_matrixes(opti_h, opti_h_nocorr, s, _KL2Mismatch)
+
+        opti_h[0] = []  # Input layer has no Mismatch cost
+
+        return opti_h
+
+
+def heuristicLandauer(model, std):
+    """
+    Compute estimation based on a heuristic of the Landauer cost of each layer in eV
+    that yields a basic keras model when the input follows a normal distribution.
+
+    Parameters
+    ----------
+    model : a tf.keras.Model class
+        the model over which the Landauer cost is computed. It must only be composed of
+        tf.keras.layers.Dense, keras.layers.Conv2D, tf.keras.layers.MaxPooling2D,
+        tf.keras.layers.AveragePooling2D, tf.keras.layers.Flatten and/or
+        tf.keras.layers.Reshape layers
+    std : float
+        The standard deviation of the input normal distribution
+
+    Returns
+    -------
+    res : ndarray
+        The Landauer cost in eV of each layer.
+    """
+    costs = [0]
+    S_normal = entropy_normal(std)
+    shapes = get_shapes(model)
+    for i in range(len(model.layers)):
+        previousShape = shapes[i]
+        shape = shapes[i + 1]
+        layer = model.layers[i]
+
+        if isinstance(layer, tf.keras.layers.Dense):
+            costs.append(shape[1]*previousShape[1]*S_normal*_ENTROPY2EV)
+
+        elif isinstance(layer, tf.keras.layers.Conv2D):
+            K = layer.kernel_size[0]
+            costs.append(shape[3] * (previousShape[1]-K+1)**2 * K**2 * S_normal * _ENTROPY2EV)
+
+        elif isinstance(layer, tf.keras.layers.MaxPooling2D) or\
+                isinstance(layer, tf.keras.layers.AveragePooling2D):
+            P = layer.pool_size[0]
+            costs.append(previousShape[1]*previousShape[2]//(P**2) * (P**2 - 1/P)* S_normal * _ENTROPY2EV)
+
+        elif isinstance(layer, tf.keras.layers.Flatten) or\
+                isinstance(layer, tf.keras.layers.Reshape):
+            costs.append(0)
+
+    return costs
+
+def heuristicMismatch(model, mean, std, mean_opt, std_opt):
+    """
+    Compute estimation based on a heuristic of the Landauer cost of each layer in eV
+    that yields a basic keras model when the input follows a normal distribution.
+
+    Parameters
+    ----------
+    model : a tf.keras.Model class
+        the model over which the Landauer cost is computed. It must only be composed of
+        tf.keras.layers.Dense, keras.layers.Conv2D, tf.keras.layers.MaxPooling2D,
+        tf.keras.layers.AveragePooling2D, tf.keras.layers.Flatten and/or
+        tf.keras.layers.Reshape layers
+    mean : float
+        The mean of the input normal distribution
+    std : float
+        The standard deviation of the input normal distribution
+    mean_opt: float
+        The mean of the optimal normal distribution
+    std_opt: float
+        The standard deviation of the optimal normal distribution
+
+    Returns
+    -------
+    res : ndarray
+        The Mismatch cost in eV of each layer.
+    """
+    costs = [0]
+    D_normal = KL_divergence_normal(mean, std, mean_opt, std_opt)
+    shapes = get_shapes(model)
+    for i in range(len(model.layers)):
+        previousShape = shapes[i]
+        shape = shapes[i + 1]
+        layer = model.layers[i]
+
+        if isinstance(layer, tf.keras.layers.Dense):
+            costs.append(shape[1]*previousShape[1]*D_normal*_ENTROPY2EV)
+
+        elif isinstance(layer, tf.keras.layers.Conv2D):
+            K = layer.kernel_size[0]
+            costs.append(shape[3] * (previousShape[1]-K+1)**2 * K**2 * D_normal * _ENTROPY2EV)
+
+        elif isinstance(layer, tf.keras.layers.MaxPooling2D) or\
+                isinstance(layer, tf.keras.layers.AveragePooling2D):
+            P = layer.pool_size[0]
+            costs.append(previousShape[1]*previousShape[2]//(P**2) * (P**2 - 1/P)* D_normal * _ENTROPY2EV/3)
+
+        elif isinstance(layer, tf.keras.layers.Flatten) or\
+                isinstance(layer, tf.keras.layers.Reshape):
+            costs.append(0)
+
+    return costs
 
 
 #########################################################################
@@ -204,6 +308,20 @@ def KL_divergence(countP, countQ):
 
 def _KL2Mismatch(KL_i, KL_f):
     return (KL_i - KL_f) * _ENTROPY2EV
+
+def entropy_normal(sigma):
+    """
+    Return the analytical entropy of a normal distribution of standard deviation sigma
+    """
+    return 0.5 * np.log(2 * np.pi * np.e * sigma**2)
+
+def KL_divergence_normal(mu1, sigma1, mu2, sigma2):
+    """
+    Return the analytical KL divergence between a normal distribution of mean mu1 and
+    standard deviation sigma1 and another normal distribution of mean mu2 and standard deviation
+    sigma2
+    """
+    return np.log(sigma2/sigma1) + (sigma1**2+ (mu2 - mu1)**2)/(2*sigma2**2) - 0.5
 
 #########################################################################
 ###                  MULTIDIMENSION ARRAY FUNCTIONS                   ###
@@ -313,6 +431,8 @@ def sum_matrix(matrixes, shapes):
     """
     res = 0
     for i in range(len(matrixes)):
+        if len(matrixes[i]) == 0: continue
+
         for ind in index_multidim(shapes[i]):
             res += get_matrix(matrixes[i], ind)
 
@@ -391,6 +511,9 @@ def _add2histogram(histo, datapoint, bin_size=0.01):
 
     datapoint: tuple. The datapoint (x1,x2,...) to add.
     x1 correspond to it's position in the first dimension and so on.
+
+    bin_size : float, optional
+    Define the size of the bins that are used to compute discretized entropy.
     """
     position = tuple([round(d / bin_size) for d in datapoint])
 
@@ -412,6 +535,9 @@ def _add2layer_histo(histos, shape, data, bin_size=0.01):
 
     data: ndarray. A multidimensional array of datapoint to add.
     In datapoint (x1,x2,...) x1 correspond to its position in the first dimension and so on.
+
+    bin_size : float, optional
+    Define the size of the bins that are used to compute discretized entropy.
     """
     for ind in index_multidim(shape):
         _add2histogram(get_matrix(histos, ind), (get_matrix(data, ind),), bin_size=bin_size)
@@ -490,7 +616,7 @@ def _input_outputs_func(model):
     return functor
 
 
-def _samples2Histos(model, inputs, bin_size=0.01):
+def _samples2Histos(model, inputs, bin_size=0.01, verbose=True):
     """
     Run a set of samples through a keras model and store for each neuron a histogram
     storing the occurence of the neuron output in each bin.
@@ -512,17 +638,20 @@ def _samples2Histos(model, inputs, bin_size=0.01):
     histos = _init_histogram_matrix(shapes)
     functor = _input_outputs_func(model)
 
-    for i in range(len(inputs)):
-        inp = inputs[i]
-        out = functor([np.array([inp])])
+    with tqdm(total=len(inputs), disable= not verbose) as pbar:
+        for i in range(len(inputs)):
+            inp = inputs[i]
+            out = functor([np.array([inp])])
 
-        for i in range(len(out)):
-            _add2layer_histo(histos[i], shapes[i], out[i], bin_size=bin_size)
+            for i in range(len(out)):
+                _add2layer_histo(histos[i], shapes[i], out[i], bin_size=bin_size)
+
+            if verbose: pbar.update(1)
 
     return histos
 
 
-def _samples2HistosCorrelated(model, inputs, bin_size=0.01):
+def _samples2HistosCorrelated(model, inputs, bin_size=0.01, verbose=True):
     """
     Run a set of samples through a keras model and store for each neuron a histogram
     storing the occurence of the set of linked initial neurons's output in
@@ -548,72 +677,75 @@ def _samples2HistosCorrelated(model, inputs, bin_size=0.01):
     histos = _init_histogram_matrix(shapes)
     functor = _input_outputs_func(model)
 
-    for k in range(len(inputs)):  # Iterate through all sample
-        inp = inputs[k]
-        out = functor([np.array([inp])])  # Compute the neuron output in the model
+    with tqdm(total=len(inputs), disable=not verbose) as pbar:
+        for k in range(len(inputs)):  # Iterate through all sample
+            inp = inputs[k]
+            out = functor([np.array([inp])])  # Compute the neuron output in the model
 
-        for i in range(len(model.layers) - 1, -1, -1):  # Iterate through all layers
-            previousShape = shapes[i]
-            shape = shapes[i + 1]
-            layer = model.layers[i]
+            for i in range(len(model.layers) - 1, -1, -1):  # Iterate through all layers
+                previousShape = shapes[i]
+                shape = shapes[i + 1]
+                layer = model.layers[i]
 
-            if isinstance(layer, tf.keras.layers.Dense):  # Check the layer type
-                for ind in index_multidim(shape):  # Iterate through all final neuron
-                    prev_result = []
+                if isinstance(layer, tf.keras.layers.Dense):  # Check the layer type
+                    for ind in index_multidim(shape):  # Iterate through all final neuron
+                        prev_result = []
 
-                    # Iterate through all linked initial neuron
-                    # Add their output to a list
-                    for prev_index in index_multidim(previousShape):
-                        prev_result.append(get_matrix(out[i], prev_index))
-
-                    # Add the list of output to the histogram
-                    _add2histogram(get_matrix(histos[i + 1], ind), tuple(prev_result),
-                                   bin_size=bin_size)
-
-            elif isinstance(layer, tf.keras.layers.Conv2D):
-                kernel = layer.kernel_size
-                stride = layer.strides
-
-                for ind in index_multidim(shape):
-                    prev_result = []
-
-                    for n_filter in range(previousShape[3]):  # All filter index
-                        for m in range(kernel[0]):  # 2nd dim of the kernel
-                            for n in range(kernel[1]):  # 1st dim of the kernel
-                                prev_index = (ind[0], ind[1] * stride[0] + m,
-                                              ind[2] * stride[1] + n, n_filter)
-                                prev_result.append(get_matrix(out[i], prev_index))
-
-                    _add2histogram(get_matrix(histos[i + 1], ind), tuple(prev_result),
-                                   bin_size=bin_size)
-
-            elif isinstance(layer, tf.keras.layers.MaxPooling2D) or \
-                    isinstance(layer,tf.keras.layers.AveragePooling2D):
-                # Main difference with convolution: only one filter in previous layer
-                kernel = layer.pool_size
-                stride = layer.strides
-
-                for ind in index_multidim(shape):
-                    prev_result = []
-
-                    for m in range(kernel[0]):
-                        for n in range(kernel[1]):
-                            prev_index = (ind[0], ind[1] * stride[0] + m,
-                                          ind[2] * stride[1] + n, ind[3])
+                        # Iterate through all linked initial neuron
+                        # Add their output to a list
+                        for prev_index in index_multidim(previousShape):
                             prev_result.append(get_matrix(out[i], prev_index))
 
-                    _add2histogram(get_matrix(histos[i + 1], ind), tuple(prev_result),
-                                   bin_size=bin_size)
+                        # Add the list of output to the histogram
+                        _add2histogram(get_matrix(histos[i + 1], ind), tuple(prev_result),
+                                       bin_size=bin_size)
 
-            elif isinstance(layer, tf.keras.layers.Flatten) or\
-                    isinstance(layer, tf.keras.layers.Reshape):
-                pass  # There is no initial neuron when reshapping
+                elif isinstance(layer, tf.keras.layers.Conv2D):
+                    kernel = layer.kernel_size
+                    stride = layer.strides
+
+                    for ind in index_multidim(shape):
+                        prev_result = []
+
+                        for n_filter in range(previousShape[3]):  # All filter index
+                            for m in range(kernel[0]):  # 2nd dim of the kernel
+                                for n in range(kernel[1]):  # 1st dim of the kernel
+                                    prev_index = (ind[0], ind[1] * stride[0] + m,
+                                                  ind[2] * stride[1] + n, n_filter)
+                                    prev_result.append(get_matrix(out[i], prev_index))
+
+                        _add2histogram(get_matrix(histos[i + 1], ind), tuple(prev_result),
+                                       bin_size=bin_size)
+
+                elif isinstance(layer, tf.keras.layers.MaxPooling2D) or \
+                        isinstance(layer,tf.keras.layers.AveragePooling2D):
+                    # Main difference with convolution: only one filter in previous layer
+                    kernel = layer.pool_size
+                    stride = layer.strides
+
+                    for ind in index_multidim(shape):
+                        prev_result = []
+
+                        for m in range(kernel[0]):
+                            for n in range(kernel[1]):
+                                prev_index = (ind[0], ind[1] * stride[0] + m,
+                                              ind[2] * stride[1] + n, ind[3])
+                                prev_result.append(get_matrix(out[i], prev_index))
+
+                        _add2histogram(get_matrix(histos[i + 1], ind), tuple(prev_result),
+                                       bin_size=bin_size)
+
+                elif isinstance(layer, tf.keras.layers.Flatten) or\
+                        isinstance(layer, tf.keras.layers.Reshape):
+                    pass  # There is no initial neuron when reshapping
+
+            if verbose: pbar.update(1)
 
     histos[0] = []  # Input layer has no prior initial neuron
     return histos
 
 
-def _histos2Entropy(histos, shapes, entropy_func=CAE_entropy, bin_size=0.01):
+def _histos2Entropy(histos, shapes, entropy_func=CAE_entropy, bin_size=0.01, epsilon=0):
     """
     Convert every histogram of a keras model contained in a multidimensional array
     to their respective entropy
@@ -643,6 +775,14 @@ def _histos2Entropy(histos, shapes, entropy_func=CAE_entropy, bin_size=0.01):
         res : float
         The entropy of the histogram
 
+    bin_size : float, optional
+    Define the size of the bins that are used to compute discretized entropy.
+
+    epsilon: float, optional
+    Define the threshold under which entropy is considered as degenerate distribution's entropy
+    In this case we don't add the correction factor as it would make estimation worth by default
+    we don't use this estimation
+
     Returns
     -------
     res : ndarray
@@ -657,7 +797,8 @@ def _histos2Entropy(histos, shapes, entropy_func=CAE_entropy, bin_size=0.01):
         for ind in index_multidim(shapes[i]):
             histo = get_matrix(histos[i], ind)
 
-            entropy = entropy_func(np.array(list(histo.values()))) + np.log(bin_size)
+            entropy = entropy_func(np.array(list(histo.values())))
+            if np.abs(entropy) >= epsilon: entropy += np.log(bin_size)
             set_matrix(histos[i], ind, entropy)
 
 
@@ -804,9 +945,10 @@ if __name__ == "__main__":
     bin_size = 0.01
 
     inputs = np.random.normal(0, 1, (n_samples, *(model.input.shape[1:])))
-    opt_inputs = np.random.normal(0.5, 1, (n_samples, *(model.input.shape[1:])))
+    opt_inputs = np.random.normal(0.5, 1.5, (n_samples, *(model.input.shape[1:])))
 
     #h = samples2MismatchPerNeuron(model, inputs, opt_inputs, bin_size=bin_size)
-    h = samples2LandauerPerNeuron(model, inputs, bin_size=bin_size)
+    h = samples2Landauer(model, inputs, bin_size=bin_size)
+    #h = heuristicLandauer(model, 1)
 
     print(h)
